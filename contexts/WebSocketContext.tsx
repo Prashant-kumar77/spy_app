@@ -65,6 +65,11 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({
           message.timestamp = Date.now();
           setLastMessage(message);
           
+          // Log ROOM_STATE messages specifically
+          if (message.type === 'ROOM_STATE') {
+            console.log('ROOM_STATE received:', message);
+          }
+          
           // Notify all registered handlers
           messageHandlersRef.current.forEach(handler => {
             try {

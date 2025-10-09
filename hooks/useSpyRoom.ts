@@ -65,34 +65,62 @@ export const useSpyRoom = (roomId: string) => {
   const [speakingState, setSpeakingState] = useState<SpeakingState | null>(null);
   const [playerWord, setPlayerWord] = useState<string | null>(null);
   const [playerRole, setPlayerRole] = useState<'SPY' | 'CIVILIAN' | null>(null);
+  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
+  const [hasRequestedState, setHasRequestedState] = useState(false);
 
-  // Join room when component mounts
+  // Reset flags when roomId changes
   useEffect(() => {
-    if (isConnected && roomId && userId) {
-      sendMessage({
+    setHasJoinedRoom(false);
+    setHasRequestedState(false);
+    setRoomState(null);
+    setSpeakingState(null);
+    setPlayerWord(null);
+    setPlayerRole(null);
+    setChatMessages([]);
+    setError(null);
+    setIsLoading(true);
+  }, [roomId]);
+
+  // Stable sendMessage function
+  const stableSendMessage = useCallback((message: any) => {
+    sendMessage(message);
+  }, [sendMessage]);
+
+  // Join room when component mounts (only once)
+  useEffect(() => {
+    if (isConnected && roomId && userId && !hasJoinedRoom) {
+      const displayName = `Player_${Math.floor(Math.random() * 10000)}`;
+      console.log(`Sending JOIN_ROOM for user ${userId} (${displayName}) to room ${roomId}`);
+      stableSendMessage({
         type: 'JOIN_ROOM',
         data: {
           roomId,
           userId,
-          displayName: `Player_${Math.floor(Math.random() * 10000)}`
+          displayName
         }
       });
+      setHasJoinedRoom(true);
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, hasJoinedRoom, stableSendMessage]);
 
-  // Get initial room state
+  // Get initial room state (only once after joining)
   useEffect(() => {
-    if (isConnected && roomId) {
-      sendMessage({
+    if (isConnected && roomId && hasJoinedRoom && !hasRequestedState) {
+      console.log('Requesting room state:', roomId);
+      stableSendMessage({
         type: 'GET_ROOM_STATE',
         data: { roomId }
       });
+      setHasRequestedState(true);
     }
-  }, [isConnected, roomId, sendMessage]);
+  }, [isConnected, roomId, hasJoinedRoom, hasRequestedState, stableSendMessage]);
 
   // Handle room state updates
   useWebSocketMessage('ROOM_STATE', useCallback((message) => {
+    console.log('ROOM_STATE received:', message);
     if (message.data?.roomId === roomId) {
+      const players = message.data.state?.players ? Object.values(message.data.state.players) : [];
+      console.log(`Updated player list for room ${roomId}:`, players.map((p: any) => ({ userId: p.userId, displayName: p.displayName, ready: p.ready })));
       setRoomState(message.data.state);
       setSpeakingState(message.data.state?.speaking || null);
       setIsLoading(false);
@@ -186,7 +214,7 @@ export const useSpyRoom = (roomId: string) => {
   // Room actions
   const setReady = useCallback((ready: boolean) => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'SET_READY',
         data: {
           roomId,
@@ -195,11 +223,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const startGame = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'START_GAME',
         data: {
           roomId,
@@ -207,11 +235,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const sendChatMessage = useCallback((message: string) => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'CHAT_MESSAGE',
         data: {
           roomId,
@@ -221,11 +249,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const vote = useCallback((targetId: string | null) => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'VOTE',
         data: {
           roomId,
@@ -234,11 +262,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const leaveRoom = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'PARTICIPANT_LEAVE_ROOM',
         data: {
           roomId,
@@ -246,12 +274,12 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   // Speaking system actions
   const requestSpeak = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'REQUEST_SPEAK',
         data: {
           roomId,
@@ -259,11 +287,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const endSpeaking = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'END_SPEAKING',
         data: {
           roomId,
@@ -271,11 +299,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const skipSpeaker = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'SKIP_SPEAKER',
         data: {
           roomId,
@@ -283,11 +311,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const resetSpeakingQueue = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'RESET_SPEAKING_QUEUE',
         data: {
           roomId,
@@ -295,11 +323,11 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   const getPlayerWord = useCallback(() => {
     if (isConnected && roomId && userId) {
-      sendMessage({
+      stableSendMessage({
         type: 'GET_PLAYER_WORD',
         data: {
           roomId,
@@ -307,7 +335,7 @@ export const useSpyRoom = (roomId: string) => {
         }
       });
     }
-  }, [isConnected, roomId, userId, sendMessage]);
+  }, [isConnected, roomId, userId, stableSendMessage]);
 
   // Get current player info
   const currentPlayer = roomState?.players[userId || ''] || null;
