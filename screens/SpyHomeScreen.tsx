@@ -17,6 +17,8 @@ import MaterialIcon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { useAppDispatch } from '../store/hooks';
 import { setRoomId as setRoomIdAction, setRoomToken, setUserId } from '../store';
+import { useWebSocket } from '../contexts/WebSocketContext';
+
 
 type SpyHomeNav = StackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -27,6 +29,7 @@ type Props = {
 const { width, height } = Dimensions.get('window');
 
 const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
+  const { sendMessage } = useWebSocket();
   const [joinVisible, setJoinVisible] = useState(false);
   const [roomId, setRoomId] = useState('');
   const [name, setName] = useState('');
@@ -62,7 +65,7 @@ const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
       const resp = await fetch('https://spy-backend-http.onrender.com/api/v1/room/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: playerName }),
+        body: JSON.stringify({}), // Backend doesn't use name parameter
       });
       if (!resp.ok) {
         throw new Error(`Create failed: ${resp.status}`);
@@ -72,6 +75,11 @@ const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
       dispatch(setRoomToken(json.roomToken || null));
       dispatch(setRoomIdAction(json.roomId || null));
       dispatch(setUserId(json.userId || null));
+      sendMessage(JSON.stringify({
+        type: 'CREATE_ROOM',
+        roomId: json.roomId,
+        userId: json.userId,
+      }));
       navigation.navigate('Room', { roomId: json.roomId, name: playerName });
     } catch (e) {
       console.error(e);
@@ -92,17 +100,17 @@ const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
       const resp = await fetch('https://spy-backend-http.onrender.com/api/v1/room/join-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId: roomId.trim(), name: playerName }),
+        body: JSON.stringify({ roomId: roomId.trim(), addToMyClassroom: false }),
       });
       if (!resp.ok) {
         throw new Error(`Join failed: ${resp.status}`);
       }
       const json = await resp.json();
-      // { roomToken, roomId, userId }
+      // { roomToken, userId, roomData }
       dispatch(setRoomToken(json.roomToken || null));
-      dispatch(setRoomIdAction(json.roomId || null));
+      dispatch(setRoomIdAction(json.roomData?.id || roomId.trim()));
       dispatch(setUserId(json.userId || null));
-      navigation.navigate('Room', { roomId: json.roomId, name: playerName });
+      navigation.navigate('Room', { roomId: json.roomData?.id || roomId.trim(), name: playerName });
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Failed to join room. Please check the room ID and try again.');

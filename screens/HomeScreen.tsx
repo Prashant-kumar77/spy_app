@@ -22,7 +22,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       const resp = await fetch('https://spy-backend-http.onrender.com/api/v1/room/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({}), // Backend doesn't use name parameter
       });
       if (!resp.ok) {
         throw new Error(`Create failed: ${resp.status}`);
@@ -50,17 +50,17 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         const resp = await fetch('https://spy-backend-http.onrender.com/api/v1/room/join-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId: roomId.trim(), name }),
+          body: JSON.stringify({ roomId: roomId.trim(), addToMyClassroom: false }),
         });
         if (!resp.ok) {
           throw new Error(`Join failed: ${resp.status}`);
         }
         const json = await resp.json();
-        // { roomToken, roomId, userId }
+        // { roomToken, userId, roomData }
         dispatch(setRoomToken(json.roomToken || null));
-        dispatch(setRoomIdAction(json.roomId || null));
+        dispatch(setRoomIdAction(json.roomData?.id || roomId.trim()));
         dispatch(setUserId(json.userId || null));
-        navigation.navigate('Room', { roomId: json.roomId, name });
+        navigation.navigate('Room', { roomId: json.roomData?.id || roomId.trim(), name });
       } catch (e) {
         console.error(e);
       }

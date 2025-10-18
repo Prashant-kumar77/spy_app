@@ -1,1257 +1,707 @@
-import React, { useState, useEffect } from 'react';
+import * as React from 'react';
 import {
-  View,
-  Text,
   StyleSheet,
-  TouchableOpacity,
-  Dimensions,
-  StatusBar,
+  View,
   FlatList,
-  Image,
-  Alert,
+  ListRenderItem,
+  TouchableOpacity,
+  Text,
+  TextInput,
+  SafeAreaView,
+  StatusBar,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
 } from 'react-native';
-import { StackNavigationProp, StackScreenProps } from '@react-navigation/stack';
-import { RootStackParamList } from '../navigation/MainNavigation';
-import Icon from 'react-native-vector-icons/Ionicons';
-import MaterialIcon from 'react-native-vector-icons/MaterialCommunityIcons';
-import LinearGradient from 'react-native-linear-gradient';
-import { useSpyRoom, PlayerInfo, ChatMessage } from '../hooks/useSpyRoom';
-import { useAppSelector } from '../store/hooks';
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import {
+  AudioSession,
   LiveKitRoom,
   useTracks,
+  useLocalParticipant,
   TrackReferenceOrPlaceholder,
   VideoTrack,
   isTrackReference,
-  useConnectionState,
-  useLocalParticipant,
 } from '@livekit/react-native';
 import { Track } from 'livekit-client';
+import LinearGradient from 'react-native-linear-gradient';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useAppSelector } from '../store/hooks';
+import { useWebSocket } from '../contexts/WebSocketContext';
+import { styles, Colors } from './styles';
+import HeaderCard from '../components/HeaderCard';
+import PlayersGrid from '../components/PlayersGrid';
+import PrimaryActions from '../components/PrimaryActions';
+import ChatPanel from '../components/ChatPanel';
+import BottomToolbar from '../components/BottomToolbar';
+import GameModal from '../components/GameModal';
 
-const { width, height } = Dimensions.get('window');
 
-type Props = StackScreenProps<RootStackParamList, 'Room'>;
+const wsURL = "wss://live-stream-j0ngkwts.livekit.cloud";
 
-const SpyRoomScreen: React.FC<Props> = ({ navigation, route }) => {
-  const { roomId, name } = route.params || { roomId: '', name: '' };
-  const roomToken = useAppSelector(state => state.app.roomToken);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [isConnecting, setIsConnecting] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-  
-  // Add timeout for connection
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (isConnecting) {
-        console.log('Connection timeout - switching to fallback mode');
-        setConnectionError('Connection timeout. Using fallback mode.');
-        setIsConnecting(false);
-      }
-    }, 10000); // 10 second timeout
+interface ReadyStatus{
+  [key : string] : boolean
+}
 
-    return () => clearTimeout(timeout);
-  }, [isConnecting]);
 
-  // LiveKit configuration
-  const wsURL = "wss://live-stream-j0ngkwts.livekit.cloud";
-  
-  console.log('SpyRoomScreen - roomId:', roomId);
-  console.log('SpyRoomScreen - roomToken:', roomToken ? 'Present' : 'Missing');
-  console.log('SpyRoomScreen - using defaultToken:', !roomToken);
-  
-  const handleError = (error: Error) => {
-    console.error('LiveKit Room error:', error);
-    setConnectionError(error.message);
-    setIsConnecting(false);
-    Alert.alert('Connection Error', `LiveKit connection failed: ${error.message}`);
-  };
+interface Voting{
+  [key : string] : string[]
+}
 
-  const handleConnected = () => {
-    console.log('LiveKit connected successfully');
-    setIsConnecting(false);
-    setConnectionError(null);
-  };
-
-  const handleDisconnected = () => {
-    console.log('LiveKit disconnected');
-    setIsConnecting(false);
-  };
-
-  if (!roomToken) {
-    return (
-      <LinearGradient
-        colors={['#042A6B', '#0A58CA']}
-        style={styles.container}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-      >
-        <StatusBar barStyle="light-content" backgroundColor="#042A6B" />
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>
-            Missing room token. Go back and create/join again.
-          </Text>
-          <TouchableOpacity 
-            style={styles.retryButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.retryButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
-    );
+interface RoomState{
+  chats : string[],
+  readyStatus : ReadyStatus,
+  gameStarted : boolean,
+  spy : {
+      word : string,
+      player : string
   }
+  voting : Voting,
+  civilianWord : string,
+  alivePlayers : string[]
+}
+
+export default function App() {
+  const { sendMessage } = useWebSocket();
+  const roomId = useAppSelector(state => state.app.roomId);
+  const userId = useAppSelector(state => state.app.userId);
+  const token = useAppSelector(state => state.app.roomToken);
+  useEffect(() => {
+
+    sendMessage(JSON.stringify({
+      type: 'join_room',
+      roomId,
+      userId,
+    }));
+
+    const start = async () => {
+      await AudioSession.startAudioSession();
+    };
+    start();
+    return () => {
+      AudioSession.stopAudioSession();
+    };
+  }, []);
 
   return (
     <LiveKitRoom
       serverUrl={wsURL}
-      token={roomToken}
+      token={token!}
       connect={true}
-      options={{ 
+      options={{
         adaptiveStream: { pixelDensity: 'screen' },
-        publishDefaults: {
-          videoSimulcastLayers: [],
-        }
       }}
       audio={true}
       video={false}
-      onError={handleError}
-      onConnected={handleConnected}
-      onDisconnected={handleDisconnected}
     >
-      <SpyRoomContent navigation={navigation} route={route} />
+      <RoomView />
     </LiveKitRoom>
   );
-};
+}
 
-// Main room content component
-const SpyRoomContent: React.FC<{ navigation: any; route: any }> = ({ navigation, route }) => {
-  const { roomId, name } = route.params || { roomId: '', name: '' };
-  const [isMuted, setIsMuted] = useState(false);
+const RoomView = () => {
+  const tracks = useTracks([Track.Source.Camera]);
+  const { localParticipant } = useLocalParticipant();
+  const [isMicOn, setIsMicOn] = useState(true);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const roomId = useAppSelector(state => state.app.roomId);
+  const userId = useAppSelector(state => state.app.userId);
+  const { sendMessage, addMessageListener } = useWebSocket();
+  const [playerList, setPlayerList] = useState<string[]>([]);
+  const [spyword, setSpyword] = useState<string | null>(null);
+  const [civilianWord, setCivilianWord] = useState<string | null>(null);
+  const [ready, setReady] = useState<boolean>(false);
+  const [notReady, setNotReady] = useState<boolean>(false);
+  const [currentRound, setCurrentRound] = useState<number>(0);
+  const [countdown, setCountdown] = useState<number>(0);
+  const [modalVisible, setModalVisible] = useState<boolean>(false);
+  const [modalType, setModalType] = useState<'countdown' | 'word' | 'voting' | 'game_result'>('countdown');
+  const [modalWord, setModalWord] = useState<string>('');
+  const [modalWordType, setModalWordType] = useState<'spy' | 'civilian'>('civilian');
+  const [gameResult, setGameResult] = useState<{winner: string, spy: string} | null>(null);
+  const [showChatInput, setShowChatInput] = useState<boolean>(false);
+  const [speakStatement, setSpeakStatement] = useState<boolean>(false);
+  const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);
+  const [startVoting, setStartVoting] = useState<boolean>(false);
+  const [endVoting, setEndVoting] = useState<boolean>(false);
+  const [gameStarted, setGameStarted] = useState<boolean>(false);
+  const [gameEnded, setGameEnded] = useState<boolean>(false);
+  const [vote, setVote] = useState<string | null>(null);
+  const [alivePlayers, setAlivePlayers] = useState<string[]>([]);
+  const [chat, setChat] = useState<string | null>(null);
+  const [voting, setVoting] = useState<boolean>(false);
+  const [yourVote, setYourVote] = useState<string | null>(null);
+  const [roomState, setRoomState] = useState<RoomState | null>(null);
+  const [chatMessages, setChatMessages] = useState<string[]>([]);
+  const [chatInput, setChatInput] = useState<string>('');
+  const [votingTime, setVotingTime] = useState<number>(0);
+  const [speakerTime, setSpeakerTime] = useState<number>(0);
+  const votingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const speakerTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [playersReadyStatus, setPlayersReadyStatus] = useState<ReadyStatus | null>(null);
+  const [votingResults, setVotingResults] = useState<{[playerId: string]: string[]} | null>(null);
+  const [votingEnded, setVotingEnded] = useState<boolean>(false);
+  const [currentUserVote, setCurrentUserVote] = useState<string | null>(null);
+
+  useEffect(() => {
+    sendMessage(JSON.stringify({
+      type: 'join_room',
+      roomId,
+      userId,
+    }));
+
+    return ()=>{
+      sendMessage(JSON.stringify({
+        type: 'leave_room',
+        roomId,
+        userId,
+      }));
+    };
+  }, []);
+
   
-  // LiveKit hooks (with fallback for when LiveKit is not available)
-  let connectionState: any = 'disconnected';
-  let tracks: any[] = [];
-  let localParticipant: any = null;
-
-  try {
-    connectionState = useConnectionState();
-    tracks = useTracks([Track.Source.Camera]);
-    localParticipant = useLocalParticipant();
-  } catch (error) {
-    console.log('LiveKit hooks not available, using fallback values');
-  }
-
-  // Use WebSocket hook for room management
-  const {
-    roomState,
-    chatMessages,
-    isLoading,
-    error,
-    currentPlayer,
-    isHost,
-    players,
-    readyPlayers,
-    canStartGame,
-    isConnected,
-    setReady,
-    startGame,
-    sendChatMessage,
-    vote,
-    leaveRoom,
-    // Speaking system
-    speakingState,
-    isCurrentSpeaker,
-    isInSpeakingQueue,
-    canRequestSpeak,
-    requestSpeak,
-    endSpeaking,
-    skipSpeaker,
-    resetSpeakingQueue,
-    // Game system
-    playerWord,
-    playerRole,
-    getPlayerWord,
-  } = useSpyRoom(roomId);
-
-  // Handle WebSocket connection status
   useEffect(() => {
-    if (!isConnected) {
-      Alert.alert('Connection Lost', 'Lost connection to server. Attempting to reconnect...');
-    }
-  }, [isConnected]);
+    const unsubscribeRoomState = addMessageListener('room_state', (message: any) => {
+      console.log("ROOM_STATE", message);
+      setRoomState(message.roomState);
+      setPlayersReadyStatus(message.roomState.readyStatus);
+    });
 
-  // Handle errors
-  useEffect(() => {
-    if (error) {
-      Alert.alert('Error', error);
-    }
-  }, [error]);
+    const unsubscribePlayerList = addMessageListener('playerList', (message: any) => {
+      console.log("PLAYER_LIST", message);
+      setPlayerList(message.playerList);
+    });
 
-  const handleGetReady = () => {
-    if (currentPlayer) {
-      setReady(!currentPlayer.ready);
-    }
-  };
-
-  const handleInvite = () => {
-    // Handle invite functionality
-    console.log('Invite pressed');
-    // You can implement share functionality here
-  };
-
-  const handleStartGame = () => {
-    if (canStartGame) {
-      startGame();
-    }
-  };
-
-  const handleMicToggle = async () => {
-    // Always toggle local state first for immediate UI feedback
-    const newMutedState = !isMuted;
-    setIsMuted(newMutedState);
-    
-    if (localParticipant) {
-      try {
-        // Debug: Log available methods on localParticipant
-        console.log('localParticipant methods:', Object.getOwnPropertyNames(localParticipant));
-        console.log('localParticipant prototype methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(localParticipant)));
-        
-        // Check if the method exists before calling it
-        if (typeof localParticipant.setMicrophoneEnabled === 'function') {
-          console.log('Using setMicrophoneEnabled method');
-          await localParticipant.setMicrophoneEnabled(!newMutedState);
-        } else {
-          // Try alternative method names
-          const enableMic = localParticipant.enableMicrophone || 
-                           localParticipant.setMicrophoneEnabled ||
-                           localParticipant.muteMicrophone;
-          
-          if (typeof enableMic === 'function') {
-            console.log('Using alternative microphone method');
-            await enableMic.call(localParticipant, !newMutedState);
-          } else {
-            // If no method found, just use local state
-            console.log('No microphone method found, using local state only');
-          }
-        }
-      } catch (error) {
-        console.error('Error toggling microphone:', error);
-        // Keep the local state change even if LiveKit fails
+    const unsubscribeCountdown = addMessageListener('countdown', (message: any) => {
+      console.log("COUNTDOWN", message);
+      setCountdown(message.seconds);
+      if (message.seconds > 0) {
+        setModalType('countdown');
+        setModalVisible(true);
       }
-    } else {
-      // Fallback mode - just use local state
-      console.log('LiveKit not available, using local mic state');
-    }
+    });
+
+    const unsubscribeRoundStarted = addMessageListener('round_started', (message: any) => {
+      console.log("ROUND_STARTED", message);
+      setCurrentRound(message.roundNo);
+    });
+
+    const unsubscribePlayerAlreadyInRoom = addMessageListener('player_already_in_room', (message: any) => {
+      console.log("PLAYER_ALREADY_IN_ROOM", message);
+    });
+
+    const unsubscribeGameStarted = addMessageListener('gameStarted', (message: any) => {
+      console.log("GAME_STARTED", message);
+      console.log("Current playerList:", playerList);
+      
+      // Use playerList from the message if available, otherwise use local playerList
+      const initialAlivePlayers = message.playerList || playerList;
+      console.log("Setting alivePlayers to:", initialAlivePlayers);
+      setAlivePlayers(initialAlivePlayers);
+      setGameStarted(true);
+      
+      // Reset ready status for all players when game starts
+      setPlayersReadyStatus({});
+      
+      // Clear any previous voting results when new round starts
+      setVotingResults(null);
+    });
+
+    const unsubscribeSpy = addMessageListener('spy', (message: any) => {
+      console.log("SPY", message);
+      setSpyword(message.word);
+      setModalType('word');
+      setModalWord(message.word);
+      setModalWordType('spy');
+      setModalVisible(true);
+      
+      // Auto-close spy word modal after 1.5 seconds
+      setTimeout(() => {
+        setModalVisible(false);
+      }, 1500);
+    });
+
+    const unsubscribeCivilianWord = addMessageListener('civilianWord', (message: any) => {
+      console.log("CIVILIAN_WORD", message);
+      setCivilianWord(message.word);
+      setModalType('word');
+      setModalWord(message.word);
+      setModalWordType('civilian');
+      setModalVisible(true);
+      
+      // Auto-close civilian word modal after 1.5 seconds
+      setTimeout(() => {
+        setModalVisible(false);
+      }, 1500);
+    });
+
+    const unsubscribeSpeakStatement = addMessageListener('speak_statement', async (message: any) => {
+      console.log("SPEAK_STATEMENT", message);
+      setCurrentSpeaker(message.currentSpeaker);
+      setVotingEnded(false); // Show mic icon for the new speaker
+      if(speakerTimerRef.current) {
+        clearInterval(speakerTimerRef.current);
+        speakerTimerRef.current = null;
+      }
+      setSpeakerTime(0);
+      speakerTimerRef.current = setInterval(()=>{
+        setSpeakerTime((prev)=>prev+1);
+      }, 1000);
+      if(message.currentSpeaker === userId) {
+        setSpeakStatement(true);
+        if (!localParticipant) return;
+        await localParticipant.setMicrophoneEnabled(true);
+        setIsMicOn(true);
+      }
+      else {
+        setSpeakStatement(false);
+        if (!localParticipant) return;
+        await localParticipant.setMicrophoneEnabled(false);
+        setIsMicOn(false);
+      }
+      
+    });
+
+    const unsubscribeStartVoting = addMessageListener('start_voting', (message: any) => {
+      console.log("START_VOTING", message);
+      setVoting(true);
+      setModalType('voting');
+      setModalVisible(true);
+      setCurrentUserVote(null); // Clear previous vote when new voting starts
+      
+      // Auto-close voting modal after 1.5 seconds
+      setTimeout(() => {
+        setModalVisible(false);
+      }, 1500);
+      
+      // Clear any existing timer first
+      if(votingTimerRef.current) {
+        clearInterval(votingTimerRef.current);
+        votingTimerRef.current = null;
+      }
+      
+      // Reset voting time to 0
+      setVotingTime(0);
+      
+      // Start new timer after a brief delay to ensure clean state
+      setTimeout(() => {
+        votingTimerRef.current = setInterval(()=>{
+          setVotingTime((prev)=>prev+1);
+        }, 1000);
+      }, 100); // Small delay to ensure clean state
+    });
+
+    const unsubscribeEndVoting = addMessageListener('end_voting', (message: any) => {
+      console.log("END_VOTING", message);
+      setVoting(false);
+      setVotingEnded(true); // Hide mic icons after voting ends
+      setCurrentUserVote(null); // Clear current user's vote when voting ends
+      if(votingTimerRef.current) {
+        clearInterval(votingTimerRef.current);
+        votingTimerRef.current = null;
+      }
+      setVotingTime(0);
+      setSpeakerTime(0); // Reset speaker timer to 0 and keep it at 0
+      
+      // Store voting results to display for 4 seconds
+      if (message.votingResults) {
+        setVotingResults(message.votingResults);
+        
+        // Clear voting results after 4 seconds
+        setTimeout(() => {
+          setVotingResults(null);
+        }, 4000);
+      }
+    });
+
+    const unsubscribeAlivePlayers = addMessageListener('alivePlayers', (message: any) => {
+      console.log("ALIVE_PLAYERS", message);
+      setAlivePlayers(message.alivePlayers);
+    });
+
+    const unsubscribeGameEnded = addMessageListener('game_ended', (message: any) => {
+      console.log("GAME_ENDED", message);
+      
+      // Show game result modal
+      setGameResult({
+        winner: message.winner,
+        spy: message.spy
+      });
+      setModalType('game_result');
+      setModalVisible(true);
+      
+      // Clear all timers
+      if(speakerTimerRef.current) {
+        clearInterval(speakerTimerRef.current);
+        speakerTimerRef.current = null;
+      }
+      if(votingTimerRef.current) {
+        clearInterval(votingTimerRef.current);
+        votingTimerRef.current = null;
+      }
+      
+      // Reset all game-related state to default values
+      setGameEnded(true);
+      setGameStarted(false);
+      setSpyword(null);
+      setCivilianWord(null);
+      setReady(false);
+      setNotReady(false);
+      setSpeakStatement(false);
+      setCurrentSpeaker(null);
+      setStartVoting(false);
+      setEndVoting(false);
+      setVote(null);
+      setAlivePlayers(playerList);
+      setVoting(false);
+      setYourVote(null);
+      setVotingTime(0);
+      setSpeakerTime(0);
+      
+      // setChatMessages([]);
+      // setChatInput('');
+    });
+
+    const unsubscribeChat = addMessageListener('chat', (message: any) => {
+      console.log("CHAT", message);
+      setChat(message.chat);
+      setChatMessages(prev => [...prev, message.chat]);
+    });
+
+    const unsubscribePlayerLeft = addMessageListener('player_left', (message: any) => {
+      console.log("PLAYER_LEFT", message);
+      setPlayerList((prev)=>{
+        return prev.filter((player)=>player !== message.playerLeft);
+      });
+      setAlivePlayers((prev)=>{
+        return prev.filter((player)=>player !== message.playerLeft);
+      });
+    });
+
+    const unsubscribePlayerReady = addMessageListener('player_ready', (message: any) => {
+      console.log("PLAYER_READY", message);
+      setPlayersReadyStatus((prev) => ({
+        ...prev,
+        [message.playerId]: true
+      }));
+    });
+
+    const unsubscribePlayerNotReady = addMessageListener('player_not_ready', (message: any) => {
+      console.log("PLAYER_NOT_READY", message);
+      setPlayersReadyStatus((prev) => ({
+        ...prev,
+        [message.playerId]: false
+      }));
+    });
+
+    return ()=>{
+      // Clear all timers on cleanup
+      if(speakerTimerRef.current) {
+        clearInterval(speakerTimerRef.current);
+        speakerTimerRef.current = null;
+      }
+      if(votingTimerRef.current) {
+        clearInterval(votingTimerRef.current);
+        votingTimerRef.current = null;
+      }
+      
+      // Unsubscribe from all listeners
+      unsubscribeRoomState()
+      unsubscribePlayerList()
+      unsubscribePlayerAlreadyInRoom()
+      unsubscribeGameStarted()
+      unsubscribeSpy()
+      unsubscribeCivilianWord()
+      unsubscribeSpeakStatement()
+      unsubscribeStartVoting()
+      unsubscribeEndVoting()
+      unsubscribeAlivePlayers()
+      unsubscribeGameEnded()
+      unsubscribeChat()
+      unsubscribePlayerLeft()
+      unsubscribePlayerReady()
+      unsubscribePlayerNotReady()
+      unsubscribeCountdown()
+      unsubscribeRoundStarted()
+    };
+  }, [addMessageListener]);
+
+  const toggleMic = async () => {
+    if (!localParticipant) return;
+    await localParticipant.setMicrophoneEnabled(!isMicOn);
+    setIsMicOn(!isMicOn);
   };
 
-  const handleSpeakerToggle = () => {
+  const toggleSpeaker = () => {
     setIsSpeakerOn(!isSpeakerOn);
   };
 
-  const renderPlayer = ({ item }: { item: PlayerInfo }) => (
-    <View style={styles.playerItem}>
-      <View style={styles.avatarContainer}>
-        <Image 
-          source={{ uri: `https://randomuser.me/api/portraits/${item.userId.length % 2 === 0 ? 'men' : 'women'}/${(item.userId.charCodeAt(0) % 10) + 1}.jpg` }} 
-          style={styles.avatar} 
-        />
-        {item.ready && (
-          <View style={styles.readyStatus}>
-            <Icon name="checkmark" size={12} color="#fff" />
-          </View>
-        )}
-        {!isMuted && (
-          <View style={styles.micStatus}>
-            <Icon name="mic" size={10} color="#fff" />
-          </View>
-        )}
-      </View>
-      <Text style={styles.playerName} numberOfLines={1}>
-        {item.displayName}
-      </Text>
-    </View>
-  );
+  const handleInvite = () => {
+    // TODO: Implement invite functionality
+    console.log('Invite pressed');
+  };
 
-  const renderChatMessage = ({ item }: { item: ChatMessage }) => (
-    <View style={styles.chatMessage}>
-      <Text style={styles.chatText}>{item.message}</Text>
-    </View>
-  );
+  const handleReady = () => {
+    setReady(!ready);
+    if(ready) {
+    sendMessage(JSON.stringify({
+      type: 'ready',
+        roomId,
+        userId,
+      }));
+    } else {
+      sendMessage(JSON.stringify({
+        type: 'notready',
+        roomId,
+        userId,
+      }));
+    }
+    
+  };
 
-  // Show error state
-  if (error) {
-    return (
-      <LinearGradient
-        colors={['#042A6B', '#0A58CA']}
-        style={styles.container}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-      >
-        <StatusBar barStyle="light-content" backgroundColor="#042A6B" />
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity 
-            style={styles.retryButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.retryButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
-    );
-  }
+  const handlePressMic = (playerId: string) => {
+    // TODO: Implement mic press for specific player
+    console.log('Mic pressed for player:', playerId);
+  };
+
+  const handleEmoji = () => {
+    // TODO: Implement emoji picker
+    console.log('Emoji pressed');
+  };
+
+  const handleOpenChat = () => {
+    setShowChatInput(!showChatInput);
+  };
+
+  const handleModalClose = () => {
+    setModalVisible(false);
+  };
+
+  const handleVote = (playerId: string) => {
+    // Only allow alive players to vote
+    // Fix: userId can be string or null, ensure it's a string before calling includes
+    const currentUserIsAlive = gameStarted
+      ? (alivePlayers.length === 0
+          ? true
+          : (typeof userId === 'string' ? alivePlayers.includes(userId) : false))
+      : true;
+
+    if (!currentUserIsAlive) {
+      console.log('Dead players cannot vote');
+      return;
+    }
+
+    // Prevent users from voting for themselves
+    if (playerId === userId) {
+      console.log('Cannot vote for yourself');
+      return;
+    }
+
+    // Only allow voting during voting phase
+    if (!voting) {
+      console.log('Voting is not active');
+      return;
+    }
+    
+    // Update current user's vote
+    setCurrentUserVote(playerId);
+    
+    sendMessage(JSON.stringify({
+      type: 'vote',
+      roomId,
+      userId,
+      votedPlayer: playerId,
+    }));
+  };
+
+  // Transform playerList into the format expected by PlayersGrid
+  const players = useMemo(() => {
+    return playerList.map((player, index) => {
+      const playerReadyStatus = roomState?.readyStatus?.[player] || playersReadyStatus?.[player] || false;
+      // Only show cross icons when game is running and player is not alive
+      // If game is not running, all players should appear alive
+      // If game just started and alivePlayers is empty, consider all players alive
+      const isAlive = gameStarted ? (alivePlayers.length === 0 ? true : alivePlayers.includes(player)) : true;
+      
+      // Debug logging
+      if (gameStarted && !isAlive) {
+        console.log(`Player ${player} is marked as dead. alivePlayers:`, alivePlayers);
+      }
+      
+      return {
+        id: player,
+        name: player,
+        isReady: playerReadyStatus,
+        isMicOn: player === userId ? isMicOn : false,
+        isRecording: index === 4, // Seat #5 (index 4) shows recording
+        unreadCount: index === 4 ? 5 : undefined, // Seat #5 shows unread count
+        isAlive: isAlive,
+      };
+    });
+  }, [playerList, roomState?.readyStatus, playersReadyStatus, userId, isMicOn, alivePlayers, gameStarted]);
+
+  // Transform chatMessages into the format expected by ChatPanel
+  const formattedChatMessages = useMemo(() => {
+    return chatMessages.map((message, index) => {
+      const parts = message.split(': ');
+      const sender = parts[0] || 'System';
+      const messageText = parts.slice(1).join(': ') || message;
+      
+      return {
+        id: `chat-${index}-${message.slice(0, 10)}`, // More stable ID using message content
+        sender,
+        message: messageText,
+        isSystem: sender === 'System' || !message.includes(': '),
+      };
+    });
+  }, [chatMessages]);
+
+
+  const sendChatMessage = () => {
+    sendMessage(JSON.stringify({
+      type: 'send_chat',
+      roomId,
+      userId,
+      chat: `${userId}: ${chatInput}`,
+    }));
+    setChatInput('');
+  };
+
+  useEffect(() => {
+    if(ready) {
+      sendMessage(JSON.stringify({
+        type: 'ready',
+        roomId,
+        userId,
+      }));
+    }else {
+      sendMessage(JSON.stringify({
+        type: 'notready',
+        roomId,
+        userId,
+      }));
+    }
+  }, [ready]);
+
+  // Listen for keyboard events to close chat input when keyboard is dismissed
+  useEffect(() => {
+    const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+      setShowChatInput(false);
+    });
+
+    return () => {
+      keyboardDidHideListener?.remove();
+    };
+  }, []);
 
   return (
-    <LinearGradient
-      colors={['#042A6B', '#0A58CA']}
-      style={styles.container}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 0, y: 1 }}
-    >
-      <StatusBar barStyle="light-content" backgroundColor="#042A6B" />
-      
-      <View style={styles.scrollView}>
-        {/* Header Section */}
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.headerIcon}>
-            <Icon name="menu" size={24} color="#fff" />
-          </TouchableOpacity>
-          
-          <View style={styles.roomInfoCard}>
-            <View style={styles.screwContainer}>
-              <View style={styles.screw} />
-              <View style={styles.screw} />
+    <SafeAreaView style={styles.safe}>
+      <LinearGradient 
+        colors={[Colors.bgTop, Colors.bgMid, Colors.bgBottom]} 
+        style={styles.fill}
+      >
+        <StatusBar barStyle="light-content" />
+        <View style={styles.content}>
+          {/* <HeaderCard title="MR GT650 🏴‍☠️" subtitle="Who's the Spy" /> */}
+          <View style={styles.scrollView}>
+            {/* Header Section */}
+            <View style={styles.header}>
+              {/* Connection Status */}
+              {/* <View style={[styles.connectionStatus, { backgroundColor: isConnected ? '#4CAF50' : '#F44336' }]}>
+                <Icon name={isConnected ? "wifi" : "wifi-off"} size={16} color="#fff" />
+                <Text style={styles.connectionText}>{isConnected ? "Connected" : "Reconnecting..."}</Text>
+              </View> */}
+              
+              {/* Timer with time icon on the left */}
+              <View style={styles.timerContainer}>
+                <Icon name="clock-outline" size={20} color="#fff" />
+                <Text style={styles.timerText}>{voting ? `${votingTime}s` : `${speakerTime}s`}</Text>
+              </View>
+              
+              <View style={styles.roomInfoCard}>
+                <View style={styles.screwContainer}>
+                  <View style={styles.screw} />
+                  <View style={styles.screw} />
+                </View>
+                <Text style={styles.roomName}>{roomId || 'Room'}</Text>
+                <Text style={styles.gameName}>Who's the Spy</Text>
+              </View>
+              
+              {/* Round number with icon on the right */}
+              <View style={styles.roundContainer}>
+                <Icon name="counter" size={20} color="#fff" />
+                <Text style={styles.roundText}>{gameStarted ? currentRound : "--"}</Text>
+              </View>
             </View>
-            <Text style={styles.roomName}>{roomId || 'Room'} ☠️</Text>
-            <Text style={styles.gameName}>Who's the Spy</Text>
-          </View>
-          
-          <View style={styles.headerRightIcons}>
-            <TouchableOpacity style={styles.headerIcon}>
-              <Icon name="help-circle-outline" size={24} color="#fff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.headerIcon}>
-              <Icon name="people" size={24} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Player Grid */}
-        <View style={styles.playerGrid}>
-          <FlatList
-            data={players}
-            renderItem={renderPlayer}
-            keyExtractor={(item) => item.userId}
-            numColumns={2}
-            scrollEnabled={false}
-            contentContainerStyle={styles.playerGridContent}
-          />
-        </View>
-
-        {/* LiveKit Connection Status */}
-        <View style={styles.connectionStatusContainer}>
-          <Text style={styles.connectionStatusText}>
-            Audio: {connectionState === 'connected' ? '🟢 Connected' : 
-                   connectionState === 'connecting' ? '🟡 Connecting' : 
-                   connectionState === 'disconnected' ? '🔴 Disconnected' : '⚪ Unknown'}
-          </Text>
-        </View>
-
-        {/* LiveKit Video Section */}
-        {tracks.length > 0 && (
-          <View style={styles.videoContainer}>
-            <Text style={styles.videoTitle}>Live Video</Text>
-            <FlatList
-              data={tracks}
-              renderItem={({ item }) => {
-                if (isTrackReference(item)) {
-                  return (
-                    <View style={styles.videoTrackContainer}>
-                      <VideoTrack trackRef={item} style={styles.videoTrack} />
-                      <Text style={styles.videoTrackName}>
-                        {item.participant.identity}
-                      </Text>
-                    </View>
-                  );
-                }
-                return <View style={styles.videoTrackPlaceholder} />;
-              }}
-              keyExtractor={(item, index) => 
-                isTrackReference(item) ? item.participant.identity + index : `placeholder-${index}`
-              }
-              horizontal
-              showsHorizontalScrollIndicator={false}
+            <PlayersGrid 
+              players={players} 
+              onPressMic={handlePressMic} 
+              currentSpeaker={currentSpeaker || undefined}
+              isVoting={voting}
+              onVote={handleVote}
+              votingResults={votingResults}
+              votingEnded={votingEnded}
+              currentUserVote={currentUserVote}
+              currentUserId={userId}
             />
+            <PrimaryActions 
+              onInvite={handleInvite} 
+              onReady={handleReady}
+              isReady={ready}
+              isInviteDisabled={true}
+              isReadyDisabled={gameStarted}
+            />
+            <ChatPanel messages={formattedChatMessages} />
           </View>
-        )}
-
-        {/* Action Buttons */}
-        <View style={styles.actionButtonsContainer}>
-          <TouchableOpacity 
-            style={styles.actionButton} 
-            onPress={handleInvite}
-            activeOpacity={0.8}
+        </View>
+        <BottomToolbar 
+          onToggleSpeaker={toggleSpeaker}
+          onToggleMic={toggleMic}
+          onEmoji={handleEmoji}
+          onOpenChat={handleOpenChat}
+          isSpeakerOn={isSpeakerOn}
+          isMicOn={isMicOn}
+        />
+        
+        {/* Chat Input Area */}
+        {showChatInput && (
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.chatInputArea}
           >
-            <LinearGradient
-              colors={['#4A90E2', '#357ABD']}
-              style={styles.inviteButton}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-            >
-              <Text style={styles.actionButtonText}>Invite</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-
-          {roomState?.phase === 'LOBBY' ? (
-            <>
-              <TouchableOpacity 
-                style={styles.actionButton} 
-                onPress={handleGetReady}
-                activeOpacity={0.8}
+            <View style={styles.chatInputContainer}>
+              <TextInput
+                style={styles.chatInputField}
+                value={chatInput}
+                onChangeText={setChatInput}
+                placeholder="Type a message..."
+                placeholderTextColor="rgba(255,255,255,0.5)"
+                multiline
+                autoFocus={true}
+                blurOnSubmit={false}
+              />
+              <TouchableOpacity
+                style={styles.sendChatButton}
+                onPress={sendChatMessage}
               >
-                <LinearGradient
-                  colors={currentPlayer?.ready ? ['#4CAF50', '#45A049'] : ['#FF6B35', '#E55A2B']}
-                  style={styles.getReadyButton}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                >
-                  <Text style={styles.actionButtonText}>
-                    {currentPlayer?.ready ? 'Ready ✅' : 'Get Ready'}
-                  </Text>
-                </LinearGradient>
+                <Icon name="send" size={20} color="#fff" />
               </TouchableOpacity>
-
-              {isHost && canStartGame && (
-                <TouchableOpacity 
-                  style={styles.actionButton} 
-                  onPress={handleStartGame}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={['#9C27B0', '#7B1FA2']}
-                    style={styles.startGameButton}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                  >
-                    <Text style={styles.actionButtonText}>Start Game</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              )}
-            </>
-          ) : (
-            <View style={styles.gameStatusContainer}>
-              <Text style={styles.gameStatusText}>
-                {roomState?.phase === 'IN_GAME' ? 'Game in Progress' : 
-                 roomState?.phase === 'VOTING' ? 'Voting Phase' : 
-                 roomState?.phase === 'RESULTS' ? 'Game Over' : 'Unknown'}
-              </Text>
             </View>
-          )}
-        </View>
-
-        {/* Game Countdown */}
-        {roomState?.phase === 'COUNTDOWN' && (
-          <View style={styles.countdownContainer}>
-            <Text style={styles.countdownText}>
-              {roomState.countdownTimer}
-            </Text>
-            <Text style={styles.countdownSubtext}>Game Starting...</Text>
-          </View>
+          </KeyboardAvoidingView>
         )}
-
-        {/* Word Display */}
-        {roomState?.phase === 'IN_GAME' && playerWord && (
-          <View style={styles.wordContainer}>
-            <Text style={styles.wordTitle}>Your Word:</Text>
-            <Text style={styles.wordText}>{playerWord}</Text>
-            <Text style={styles.roleText}>
-              Role: {playerRole === 'SPY' ? '🕵️ Spy' : '👤 Civilian'}
-            </Text>
-            <TouchableOpacity 
-              style={styles.getWordButton}
-              onPress={getPlayerWord}
-            >
-              <Text style={styles.getWordButtonText}>Show Word</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Voting Phase */}
-        {roomState?.phase === 'VOTING' && (
-          <View style={styles.votingContainer}>
-            <View style={styles.votingHeader}>
-              <Text style={styles.votingTitle}>Voting Phase</Text>
-              <Text style={styles.votingTimer}>
-                {roomState.votingTimer}s
-              </Text>
-            </View>
-            <Text style={styles.votingSubtext}>
-              Vote for who you think is the spy
-            </Text>
-            <View style={styles.votingGrid}>
-              {players.filter(p => p.alive).map((player) => (
-                <TouchableOpacity
-                  key={player.userId}
-                  style={[
-                    styles.votingPlayer,
-                    roomState.vote?.votes[currentPlayer?.userId || ''] === player.userId && styles.votingPlayerSelected
-                  ]}
-                  onPress={() => vote(player.userId)}
-                >
-                  <Text style={styles.votingPlayerName}>{player.displayName}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TouchableOpacity 
-              style={styles.skipVoteButton}
-              onPress={() => vote(null)}
-            >
-              <Text style={styles.skipVoteButtonText}>Skip Vote</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Game Results */}
-        {roomState?.phase === 'RESULTS' && (
-          <View style={styles.resultsContainer}>
-            <Text style={styles.resultsTitle}>
-              {roomState.winner === 'CIVILIANS' ? '🏆 Civilians Win!' : '🕵️ Spy Wins!'}
-            </Text>
-            <Text style={styles.resultsSubtext}>
-              {roomState.winner === 'CIVILIANS' 
-                ? 'The spy has been eliminated!' 
-                : 'The spy has outsmarted everyone!'}
-            </Text>
-            <View style={styles.rolesContainer}>
-              <Text style={styles.rolesTitle}>Player Roles:</Text>
-              {players.map((player) => (
-                <Text key={player.userId} style={styles.roleItem}>
-                  {player.displayName}: {player.role === 'SPY' ? '🕵️ Spy' : '👤 Civilian'}
-                </Text>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Speaking System */}
-        {roomState?.phase === 'IN_GAME' && (
-          <View style={styles.speakingContainer}>
-            <View style={styles.speakingHeader}>
-              <Text style={styles.speakingTitle}>Speaking Turn</Text>
-              {speakingState?.currentSpeaker && (
-                <Text style={styles.speakingTimer}>
-                  {speakingState.speakingTimeRemaining}s
-                </Text>
-              )}
-            </View>
-
-            {speakingState?.currentSpeaker ? (
-              <View style={styles.currentSpeakerContainer}>
-                <Text style={styles.currentSpeakerText}>
-                  {roomState.players[speakingState.currentSpeaker]?.displayName} is speaking
-                </Text>
-                {isCurrentSpeaker && (
-                  <TouchableOpacity 
-                    style={styles.endSpeakingButton}
-                    onPress={endSpeaking}
-                  >
-                    <Text style={styles.endSpeakingButtonText}>End Speaking</Text>
-                  </TouchableOpacity>
-                )}
-                {isHost && !isCurrentSpeaker && (
-                  <TouchableOpacity 
-                    style={styles.skipButton}
-                    onPress={skipSpeaker}
-                  >
-                    <Text style={styles.skipButtonText}>Skip</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ) : (
-              <View style={styles.noSpeakerContainer}>
-                <Text style={styles.noSpeakerText}>No one is speaking</Text>
-                {canRequestSpeak && (
-                  <TouchableOpacity 
-                    style={styles.requestSpeakButton}
-                    onPress={requestSpeak}
-                  >
-                    <Text style={styles.requestSpeakButtonText}>Request to Speak</Text>
-                  </TouchableOpacity>
-                )}
-                {isInSpeakingQueue && (
-                  <Text style={styles.queueText}>You are in the speaking queue</Text>
-                )}
-              </View>
-            )}
-
-            {/* Speaking Queue */}
-            {speakingState?.speakingQueue && speakingState.speakingQueue.length > 0 && (
-              <View style={styles.queueContainer}>
-                <Text style={styles.queueTitle}>Speaking Queue:</Text>
-                {speakingState.speakingQueue.map((userId, index) => (
-                  <Text key={userId} style={styles.queueItem}>
-                    {index + 1}. {roomState?.players[userId]?.displayName}
-                  </Text>
-                ))}
-              </View>
-            )}
-
-            {/* Host Controls */}
-            {isHost && (
-              <TouchableOpacity 
-                style={styles.resetQueueButton}
-                onPress={resetSpeakingQueue}
-              >
-                <Text style={styles.resetQueueButtonText}>Reset Speaking Queue</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
-        {/* Chat Area */}
-        <View style={styles.chatContainer}>
-          <FlatList
-            data={chatMessages}
-            renderItem={renderChatMessage}
-            keyExtractor={(item) => item.id}
-            showsVerticalScrollIndicator={false}
-          />
-        </View>
-      </View>
-
-      {/* Bottom Control Bar */}
-      <View style={styles.bottomControlBar}>
-        <TouchableOpacity 
-          style={[styles.controlButton, isSpeakerOn && styles.controlButtonActive]} 
-          onPress={handleSpeakerToggle}
-        >
-          <Icon 
-            name={isSpeakerOn ? "volume-high" : "volume-mute"} 
-            size={20} 
-            color={isSpeakerOn ? "#fff" : "#999"} 
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[
-            styles.controlButton, 
-            !isMuted && styles.controlButtonActive,
-            isCurrentSpeaker && styles.speakingButton
-          ]} 
-          onPress={handleMicToggle}
-        >
-          <Icon 
-            name={isMuted ? "mic-off" : "mic"} 
-            size={20} 
-            color={!isMuted ? "#fff" : "#999"} 
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.controlButton}>
-          <Icon name="happy-outline" size={20} color="#999" />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.controlButton}>
-          <Icon name="chatbubble-outline" size={20} color="#999" />
-        </TouchableOpacity>
-      </View>
-    </LinearGradient>
+        
+        {/* Game Modal */}
+        <GameModal
+          visible={modalVisible}
+          type={modalType}
+          countdown={countdown}
+          word={modalWord}
+          wordType={modalWordType}
+          gameResult={gameResult}
+          onClose={handleModalClose}
+        />
+      </LinearGradient>
+    </SafeAreaView>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 10,
-  },
-  headerIcon: {
-    padding: 8,
-  },
-  roomInfoCard: {
-    backgroundColor: '#4A90E2',
-    borderRadius: 15,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-    position: 'relative',
-  },
-  screwContainer: {
-    position: 'absolute',
-    top: -8,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 15,
-  },
-  screw: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#C0C0C0',
-    borderWidth: 1,
-    borderColor: '#A0A0A0',
-  },
-  roomName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 2,
-  },
-  gameName: {
-    fontSize: 12,
-    color: '#fff',
-    opacity: 0.9,
-  },
-  headerRightIcons: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  playerGrid: {
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-  },
-  playerGridContent: {
-    justifyContent: 'space-between',
-  },
-  playerItem: {
-    width: (width - 60) / 2,
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  avatarContainer: {
-    position: 'relative',
-    marginBottom: 8,
-  },
-  avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 3,
-    borderColor: '#fff',
-  },
-  readyStatus: {
-    position: 'absolute',
-    top: -5,
-    right: -5,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#4CAF50',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  micStatus: {
-    position: 'absolute',
-    bottom: -5,
-    right: -5,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#FF6B35',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  playerName: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fff',
-    textAlign: 'center',
-  },
-  actionButtonsContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    gap: 15,
-  },
-  actionButton: {
-    borderRadius: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  inviteButton: {
-    paddingVertical: 15,
-    alignItems: 'center',
-    borderRadius: 15,
-  },
-  getReadyButton: {
-    paddingVertical: 15,
-    alignItems: 'center',
-    borderRadius: 15,
-  },
-  actionButtonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  chatContainer: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  chatMessage: {
-    backgroundColor: '#1A365D',
-    borderRadius: 15,
-    padding: 15,
-    marginBottom: 10,
-  },
-  chatText: {
-    fontSize: 14,
-    color: '#FFD700',
-    lineHeight: 20,
-  },
-  bottomControlBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: '#1A365D',
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#2D3748',
-  },
-  controlButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#2D3748',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  controlButtonActive: {
-    backgroundColor: '#4A90E2',
-  },
-  speakingButton: {
-    backgroundColor: '#4CAF50',
-    borderWidth: 2,
-    borderColor: '#FFD700',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    fontSize: 18,
-    color: '#fff',
-    fontWeight: '600',
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#ff6b6b',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  retryButton: {
-    backgroundColor: '#4A90E2',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  startGameButton: {
-    paddingVertical: 15,
-    alignItems: 'center',
-    borderRadius: 15,
-  },
-  gameStatusContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderRadius: 15,
-    alignItems: 'center',
-  },
-  gameStatusText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  // Speaking System Styles
-  speakingContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 15,
-  },
-  speakingHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  speakingTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  speakingTimer: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFD700',
-  },
-  currentSpeakerContainer: {
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  currentSpeakerText: {
-    fontSize: 16,
-    color: '#4CAF50',
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  endSpeakingButton: {
-    backgroundColor: '#f44336',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginBottom: 5,
-  },
-  endSpeakingButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  skipButton: {
-    backgroundColor: '#ff9800',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 6,
-  },
-  skipButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  noSpeakerContainer: {
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  noSpeakerText: {
-    fontSize: 16,
-    color: '#999',
-    marginBottom: 10,
-  },
-  requestSpeakButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  requestSpeakButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  queueText: {
-    fontSize: 14,
-    color: '#FFD700',
-    marginTop: 10,
-    fontWeight: '600',
-  },
-  queueContainer: {
-    marginTop: 15,
-    paddingTop: 15,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  queueTitle: {
-    fontSize: 14,
-    color: '#fff',
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  queueItem: {
-    fontSize: 12,
-    color: '#ccc',
-    marginBottom: 4,
-  },
-  resetQueueButton: {
-    backgroundColor: '#9C27B0',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 6,
-    alignSelf: 'center',
-    marginTop: 10,
-  },
-  resetQueueButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  // Game UI Styles
-  countdownContainer: {
-    alignItems: 'center',
-    paddingVertical: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 15,
-  },
-  countdownText: {
-    fontSize: 72,
-    fontWeight: 'bold',
-    color: '#FFD700',
-    marginBottom: 10,
-  },
-  countdownSubtext: {
-    fontSize: 18,
-    color: '#fff',
-    fontWeight: '600',
-  },
-  wordContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 15,
-    padding: 20,
-    alignItems: 'center',
-  },
-  wordTitle: {
-    fontSize: 16,
-    color: '#fff',
-    marginBottom: 10,
-  },
-  wordText: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#4CAF50',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  roleText: {
-    fontSize: 16,
-    color: '#FFD700',
-    marginBottom: 15,
-    fontWeight: '600',
-  },
-  getWordButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  getWordButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  votingContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 15,
-    padding: 20,
-  },
-  votingHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  votingTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  votingTimer: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#f44336',
-  },
-  votingSubtext: {
-    fontSize: 14,
-    color: '#ccc',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  votingGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  votingPlayer: {
-    backgroundColor: '#2D3748',
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginBottom: 10,
-    minWidth: '45%',
-    alignItems: 'center',
-  },
-  votingPlayerSelected: {
-    backgroundColor: '#4CAF50',
-    borderWidth: 2,
-    borderColor: '#FFD700',
-  },
-  votingPlayerName: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  skipVoteButton: {
-    backgroundColor: '#ff9800',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignSelf: 'center',
-  },
-  skipVoteButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  resultsContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 15,
-    padding: 20,
-    alignItems: 'center',
-  },
-  resultsTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FFD700',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  resultsSubtext: {
-    fontSize: 16,
-    color: '#fff',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  rolesContainer: {
-    width: '100%',
-  },
-  rolesTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 10,
-  },
-  roleItem: {
-    fontSize: 14,
-    color: '#ccc',
-    marginBottom: 5,
-  },
-  // LiveKit Connection Status Styles
-  connectionStatusContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 5,
-    borderRadius: 10,
-    padding: 10,
-    alignItems: 'center',
-  },
-  connectionStatusText: {
-    fontSize: 14,
-    color: '#fff',
-    fontWeight: '600',
-  },
-  // LiveKit Video Styles
-  videoContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 20,
-    marginVertical: 10,
-    borderRadius: 15,
-    padding: 15,
-  },
-  videoTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 10,
-  },
-  videoTrackContainer: {
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  videoTrack: {
-    width: 120,
-    height: 90,
-    borderRadius: 8,
-    backgroundColor: '#000',
-  },
-  videoTrackPlaceholder: {
-    width: 120,
-    height: 90,
-    borderRadius: 8,
-    backgroundColor: '#333',
-  },
-  videoTrackName: {
-    fontSize: 12,
-    color: '#fff',
-    marginTop: 5,
-    textAlign: 'center',
-  },
-  // Loading and Error Screen Styles
-  connectionLoadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  connectionLoadingText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  connectionLoadingSubtext: {
-    fontSize: 16,
-    color: '#ccc',
-    marginBottom: 30,
-    textAlign: 'center',
-  },
-  connectionLoadingSpinner: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backButton: {
-    backgroundColor: '#666',
-    marginTop: 10,
-  },
-});
-
-export default SpyRoomScreen;

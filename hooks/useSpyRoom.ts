@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useWebSocket, useWebSocketMessage } from '../contexts/WebSocketContext';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { useAppSelector } from '../store/hooks';
 
 export interface PlayerInfo {
@@ -43,6 +43,18 @@ export interface SpyGameState {
   votingTimer: number | null;
   eliminatedPlayers: string[];
   currentRound: number;
+  // New backend specific fields
+  chats: string[];
+  readyStatus: Record<string, boolean>;
+  gameStarted: boolean;
+  spy: {
+    word: string;
+    player: string;
+  };
+  voting: Record<string, string[]>;
+  civilianWord: string;
+  alivePlayers: string[];
+  playerList: string[];
 }
 
 export interface ChatMessage {
@@ -54,7 +66,7 @@ export interface ChatMessage {
 }
 
 export const useSpyRoom = (roomId: string) => {
-  const { sendMessage, isConnected } = useWebSocket();
+  const { sendMessage, addMessageListener } = useWebSocket();
   const userId = useAppSelector(state => state.app.userId);
   const roomToken = useAppSelector(state => state.app.roomToken);
   
@@ -83,105 +95,133 @@ export const useSpyRoom = (roomId: string) => {
 
   // Stable sendMessage function
   const stableSendMessage = useCallback((message: any) => {
-    sendMessage(message);
+    sendMessage(JSON.stringify(message));
   }, [sendMessage]);
 
   // Join room when component mounts (only once)
   useEffect(() => {
-    if (isConnected && roomId && userId && !hasJoinedRoom) {
-      const displayName = `Player_${Math.floor(Math.random() * 10000)}`;
-      console.log(`Sending JOIN_ROOM for user ${userId} (${displayName}) to room ${roomId}`);
+    if (roomId && userId && !hasJoinedRoom) {
+      console.log(`Sending join_room for user ${userId} to room ${roomId}`);
       stableSendMessage({
-        type: 'JOIN_ROOM',
-        data: {
-          roomId,
-          userId,
-          displayName
-        }
+        type: 'join_room',
+        roomId,
+        userId
       });
       setHasJoinedRoom(true);
     }
-  }, [isConnected, roomId, userId, hasJoinedRoom, stableSendMessage]);
+  }, [roomId, userId, hasJoinedRoom, stableSendMessage]);
 
   // Get initial room state (only once after joining)
   useEffect(() => {
-    if (isConnected && roomId && hasJoinedRoom && !hasRequestedState) {
-      console.log('Requesting room state:', roomId);
-      stableSendMessage({
-        type: 'GET_ROOM_STATE',
-        data: { roomId }
-      });
+    if (roomId && userId && hasJoinedRoom && !hasRequestedState) {
+      console.log('Room state will be received automatically after joining');
       setHasRequestedState(true);
     }
-  }, [isConnected, roomId, hasJoinedRoom, hasRequestedState, stableSendMessage]);
+  }, [roomId, userId, hasJoinedRoom, hasRequestedState, stableSendMessage]);
 
   // Handle room state updates
-  useWebSocketMessage('ROOM_STATE', useCallback((message) => {
-    console.log('ROOM_STATE received:', message);
-    if (message.data?.roomId === roomId) {
-      const players = message.data.state?.players ? Object.values(message.data.state.players) : [];
-      console.log(`Updated player list for room ${roomId}:`, players.map((p: any) => ({ userId: p.userId, displayName: p.displayName, ready: p.ready })));
-      setRoomState(message.data.state);
-      setSpeakingState(message.data.state?.speaking || null);
-      setIsLoading(false);
-      setError(null);
-    }
-  }, [roomId]));
+  useEffect(() => {
+    const unsubscribe = addMessageListener('room_state', (message) => {
+      console.log('=== ROOM_STATE MESSAGE RECEIVED ===');
+      console.log('Message:', message);
+      
+      // Handle both old format (with data) and new format (direct properties)
+      const messageRoomId = message.data?.roomId || message.roomId;
+      const messageRoomState = message.data?.roomState || message.roomState;
+      
+      console.log('Message roomId:', messageRoomId);
+      console.log('Current roomId:', roomId);
+      console.log('Message state:', messageRoomState);
+      
+      if (messageRoomId === roomId) {
+        const roomState = messageRoomState;
+        const players = roomState?.playerList || [];
+        console.log(`Updated player list for room ${roomId}:`, players);
+        console.log(`Total players in room: ${players.length}`);
+        
+        // Convert new backend format to expected format
+        const convertedRoomState = {
+          ...roomState,
+          phase: roomState.gameStarted ? 'IN_GAME' : 'LOBBY',
+          players: {}, // Will be populated by playerList
+          hostId: players[0] || '', // First player is host
+          playerList: players,
+        };
+        
+        // Update room state immediately
+        setRoomState(convertedRoomState);
+        setSpeakingState(null); // Not implemented in new backend
+        setIsLoading(false);
+        setError(null);
+        
+        // Force a re-render by updating a timestamp
+        console.log(`Room state updated at ${new Date().toISOString()}`);
+      } else {
+        console.log('ROOM_STATE message ignored - roomId mismatch');
+      }
+      console.log('=== ROOM_STATE MESSAGE PROCESSED ===');
+    });
 
-  // Handle speaking updates
-  useWebSocketMessage('SPEAKING_UPDATE', useCallback((message) => {
-    if (message.data?.roomId === roomId) {
-      setSpeakingState(message.data.speaking);
-    }
-  }, [roomId]));
+    return unsubscribe;
+  }, [roomId, addMessageListener]);
 
-  // Handle player word assignment
-  useWebSocketMessage('PLAYER_WORD', useCallback((message) => {
-    setPlayerWord(message.data?.word || null);
-    setPlayerRole(message.data?.role || null);
-  }, []));
+  // Handle player list updates
+  useEffect(() => {
+    const unsubscribe = addMessageListener('playerList', (message) => {
+      console.log('=== PLAYER_LIST MESSAGE RECEIVED ===');
+      console.log('Message:', message);
+      console.log('Current roomId:', roomId);
+      
+      const messageRoomId = message.data?.roomId || message.roomId;
+      const messagePlayerList = message.data?.playerList || message.playerList;
+      
+      if (messageRoomId === roomId) {
+        console.log(`Updated player list for room ${roomId}:`, messagePlayerList);
+        
+        // Update room state with new player list
+        setRoomState(prev => prev ? {
+          ...prev,
+          playerList: messagePlayerList,
+          hostId: messagePlayerList[0] || prev.hostId,
+        } : null);
+        
+        // Add system message for new players
+        setChatMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          sender: 'System',
+          message: `Player list updated: ${messagePlayerList.length} players`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'system'
+        }]);
+      }
+      console.log('=== PLAYER_LIST MESSAGE PROCESSED ===');
+    });
 
-  // Handle player updates
-  useWebSocketMessage('PLAYER_JOINED', useCallback((message) => {
-    if (message.data?.roomId === roomId) {
-      setChatMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        sender: 'System',
-        message: `${message.data.displayName} joined the room`,
-        timestamp: new Date().toLocaleTimeString(),
-        type: 'system'
-      }]);
-    }
-  }, [roomId]));
+    return unsubscribe;
+  }, [roomId, addMessageListener]);
 
-  useWebSocketMessage('PLAYER_LEFT', useCallback((message) => {
-    if (message.data?.roomId === roomId) {
-      setChatMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        sender: 'System',
-        message: `${message.data.displayName} left the room`,
-        timestamp: new Date().toLocaleTimeString(),
-        type: 'system'
-      }]);
-    }
-  }, [roomId]));
+  // Handle player word assignment (spy/civilian word)
+  useEffect(() => {
+    const unsubscribe = addMessageListener('spy', (message) => {
+      const word = message.data?.word || message.word;
+      setPlayerWord(word || null);
+      setPlayerRole('SPY');
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
 
-  // Handle ready state updates
-  useWebSocketMessage('PLAYER_READY', useCallback((message) => {
-    if (message.data?.roomId === roomId) {
-      setChatMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        sender: 'System',
-        message: `${message.data.displayName} is ready`,
-        timestamp: new Date().toLocaleTimeString(),
-        type: 'system'
-      }]);
-    }
-  }, [roomId]));
+  useEffect(() => {
+    const unsubscribe = addMessageListener('civilianWord', (message) => {
+      const word = message.data?.word || message.word;
+      setPlayerWord(word || null);
+      setPlayerRole('CIVILIAN');
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
 
   // Handle game state changes
-  useWebSocketMessage('GAME_STARTED', useCallback((message) => {
-    if (message.data?.roomId === roomId) {
+  useEffect(() => {
+    const unsubscribe = addMessageListener('gameStarted', (message) => {
       setChatMessages(prev => [...prev, {
         id: Date.now().toString(),
         sender: 'System',
@@ -189,168 +229,240 @@ export const useSpyRoom = (roomId: string) => {
         timestamp: new Date().toLocaleTimeString(),
         type: 'system'
       }]);
-    }
-  }, [roomId]));
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  // Handle speaking system
+  useEffect(() => {
+    const unsubscribe = addMessageListener('speak_statement', (message) => {
+      const currentSpeaker = message.data?.currentSpeaker || message.currentSpeaker;
+      setChatMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        sender: 'System',
+        message: `${currentSpeaker} is speaking`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'system'
+      }]);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  useEffect(() => {
+    const unsubscribe = addMessageListener('start_voting', (message) => {
+      setChatMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        sender: 'System',
+        message: 'Voting phase started!',
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'system'
+      }]);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  useEffect(() => {
+    const unsubscribe = addMessageListener('end_voting', (message) => {
+      setChatMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        sender: 'System',
+        message: 'Voting phase ended!',
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'system'
+      }]);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  useEffect(() => {
+    const unsubscribe = addMessageListener('alivePlayers', (message) => {
+      const alivePlayers = message.data?.alivePlayers || message.alivePlayers;
+      setChatMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        sender: 'System',
+        message: `Alive players: ${alivePlayers.length}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'system'
+      }]);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  useEffect(() => {
+    const unsubscribe = addMessageListener('game_ended', (message) => {
+      const winner = message.data?.winner || message.winner;
+      setChatMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        sender: 'System',
+        message: `Game ended! Winner: ${winner}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'system'
+      }]);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
 
   // Handle chat messages
-  useWebSocketMessage('CHAT_MESSAGE', useCallback((message) => {
-    if (message.data?.roomId === roomId) {
+  useEffect(() => {
+    const unsubscribe = addMessageListener('chat', (message) => {
+      const userId = message.data?.userId || message.userId;
+      const chat = message.data?.chat || message.chat;
       setChatMessages(prev => [...prev, {
-        id: message.data.id || Date.now().toString(),
-        sender: message.data.sender,
-        message: message.data.message,
-        timestamp: message.data.timestamp || new Date().toLocaleTimeString(),
+        id: Date.now().toString(),
+        sender: userId || 'Unknown',
+        message: chat,
+        timestamp: new Date().toLocaleTimeString(),
         type: 'player'
       }]);
-    }
-  }, [roomId]));
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
 
   // Handle errors
-  useWebSocketMessage('ERROR', useCallback((message) => {
-    setError(message.data?.message || 'An error occurred');
-    setIsLoading(false);
-  }, []));
+  useEffect(() => {
+    const unsubscribe = addMessageListener('error', (message) => {
+      const errorMessage = message.data?.message || message.message;
+      setError(errorMessage || 'An error occurred');
+      setIsLoading(false);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  useEffect(() => {
+    const unsubscribe = addMessageListener('room_not_found', (message) => {
+      setError('Room not found');
+      setIsLoading(false);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
+
+  useEffect(() => {
+    const unsubscribe = addMessageListener('player_already_in_room', (message) => {
+      setError('Player already in room');
+      setIsLoading(false);
+    });
+    return unsubscribe;
+  }, [addMessageListener]);
 
   // Room actions
   const setReady = useCallback((ready: boolean) => {
-    if (isConnected && roomId && userId) {
+    if (roomId && userId) {
       stableSendMessage({
-        type: 'SET_READY',
-        data: {
-          roomId,
-          userId,
-          payload: { ready }
-        }
+        type: ready ? 'ready' : 'notready',
+        roomId,
+        userId
       });
     }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+  }, [roomId, userId, stableSendMessage]);
 
   const startGame = useCallback(() => {
-    if (isConnected && roomId && userId) {
+    if (roomId && userId) {
       stableSendMessage({
-        type: 'START_GAME',
-        data: {
-          roomId,
-          userId
-        }
+        type: 'ready',
+        roomId,
+        userId
       });
     }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+  }, [roomId, userId, stableSendMessage]);
 
   const sendChatMessage = useCallback((message: string) => {
-    if (isConnected && roomId && userId) {
+    if (roomId && userId) {
       stableSendMessage({
-        type: 'CHAT_MESSAGE',
-        data: {
-          roomId,
-          userId,
-          message,
-          timestamp: new Date().toISOString()
-        }
+        type: 'send_chat',
+        roomId,
+        userId,
+        chat: message
       });
     }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+  }, [roomId, userId, stableSendMessage]);
 
   const vote = useCallback((targetId: string | null) => {
-    if (isConnected && roomId && userId) {
+    if (roomId && userId) {
       stableSendMessage({
-        type: 'VOTE',
-        data: {
-          roomId,
-          userId,
-          payload: { targetId }
-        }
+        type: 'vote',
+        roomId,
+        userId,
+        votedPlayer: targetId
       });
     }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+  }, [roomId, userId, stableSendMessage]);
 
   const leaveRoom = useCallback(() => {
-    if (isConnected && roomId && userId) {
+    if (roomId && userId) {
       stableSendMessage({
-        type: 'PARTICIPANT_LEAVE_ROOM',
-        data: {
-          roomId,
-          userId
-        }
+        type: 'leave_room',
+        roomId,
+        userId
       });
     }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+  }, [roomId, userId, stableSendMessage]);
 
-  // Speaking system actions
+  // Speaking system actions (simplified for new backend)
   const requestSpeak = useCallback(() => {
-    if (isConnected && roomId && userId) {
-      stableSendMessage({
-        type: 'REQUEST_SPEAK',
-        data: {
-          roomId,
-          userId
-        }
-      });
-    }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+    // Not implemented in new backend
+    console.log('Request speak not implemented');
+  }, []);
 
   const endSpeaking = useCallback(() => {
-    if (isConnected && roomId && userId) {
-      stableSendMessage({
-        type: 'END_SPEAKING',
-        data: {
-          roomId,
-          userId
-        }
-      });
-    }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+    // Not implemented in new backend
+    console.log('End speaking not implemented');
+  }, []);
 
   const skipSpeaker = useCallback(() => {
-    if (isConnected && roomId && userId) {
-      stableSendMessage({
-        type: 'SKIP_SPEAKER',
-        data: {
-          roomId,
-          userId
-        }
-      });
-    }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+    // Not implemented in new backend
+    console.log('Skip speaker not implemented');
+  }, []);
 
   const resetSpeakingQueue = useCallback(() => {
-    if (isConnected && roomId && userId) {
-      stableSendMessage({
-        type: 'RESET_SPEAKING_QUEUE',
-        data: {
-          roomId,
-          userId
-        }
-      });
-    }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+    // Not implemented in new backend
+    console.log('Reset speaking queue not implemented');
+  }, []);
 
   const getPlayerWord = useCallback(() => {
-    if (isConnected && roomId && userId) {
-      stableSendMessage({
-        type: 'GET_PLAYER_WORD',
-        data: {
-          roomId,
-          userId
-        }
-      });
-    }
-  }, [isConnected, roomId, userId, stableSendMessage]);
+    // Word is automatically assigned when game starts
+    console.log('Player word:', playerWord);
+  }, [playerWord]);
 
-  // Get current player info
-  const currentPlayer = roomState?.players[userId || ''] || null;
+  // Get current player info - adapt to new backend structure
+  const currentPlayer = roomState?.players?.[userId || ''] || null;
   const isHost = roomState?.hostId === userId;
-  const players = roomState ? Object.values(roomState.players) : [];
+  
+  // Convert player list from new backend format to expected format
+  const players = roomState?.playerList ? roomState.playerList.map((playerId: string) => ({
+    userId: playerId,
+    displayName: `Player_${playerId.slice(-4)}`, // Generate display name from userId
+    role: (roomState.spy?.player === playerId ? 'SPY' : 'CIVILIAN') as 'SPY' | 'CIVILIAN' | null,
+    alive: roomState.alivePlayers?.includes(playerId) ?? true,
+    ready: roomState.readyStatus?.[playerId] ?? false,
+  })) : [];
+  
+  // Convert voting format from new backend
+  const votingState = roomState?.voting ? {
+    votes: Object.keys(roomState.voting).reduce((acc, playerId) => {
+      roomState.voting[playerId].forEach(voterId => {
+        acc[voterId] = playerId;
+      });
+      return acc;
+    }, {} as Record<string, string | null>),
+    tally: Object.keys(roomState.voting).reduce((acc, playerId) => {
+      acc[playerId] = roomState.voting[playerId].length;
+      return acc;
+    }, {} as Record<string, number>)
+  } : null;
+  
   const readyPlayers = players.filter(p => p.ready);
-  const canStartGame = isHost && readyPlayers.length >= 3 && roomState?.phase === 'LOBBY';
+  const canStartGame = isHost && readyPlayers.length >= 3 && !roomState?.gameStarted;
 
-  // Speaking system info
-  const isCurrentSpeaker = speakingState?.currentSpeaker === userId;
-  const isInSpeakingQueue = speakingState?.speakingQueue.includes(userId || '');
-  const canRequestSpeak = roomState?.phase === 'IN_GAME' && !isCurrentSpeaker && !isInSpeakingQueue;
+  // Speaking system info (simplified for new backend)
+  const isCurrentSpeaker = false; // Not implemented in new backend
+  const isInSpeakingQueue = false; // Not implemented in new backend
+  const canRequestSpeak = false; // Not implemented in new backend
 
   return {
-    roomState,
+    roomState: roomState ? {
+      ...roomState,
+      vote: votingState
+    } : null,
     chatMessages,
     isLoading,
     error,
@@ -359,7 +471,6 @@ export const useSpyRoom = (roomId: string) => {
     players,
     readyPlayers,
     canStartGame,
-    isConnected,
     // Speaking system
     speakingState,
     isCurrentSpeaker,
