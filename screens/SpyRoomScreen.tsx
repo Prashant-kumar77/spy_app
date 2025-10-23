@@ -115,10 +115,11 @@ const RoomView = () => {
   const [currentRound, setCurrentRound] = useState<number>(0);
   const [countdown, setCountdown] = useState<number>(0);
   const [modalVisible, setModalVisible] = useState<boolean>(false);
-  const [modalType, setModalType] = useState<'countdown' | 'word' | 'voting' | 'game_result'>('countdown');
+  const [modalType, setModalType] = useState<'countdown' | 'word' | 'voting' | 'game_result' | 'round_started'>('countdown');
   const [modalWord, setModalWord] = useState<string>('');
   const [modalWordType, setModalWordType] = useState<'spy' | 'civilian'>('civilian');
   const [gameResult, setGameResult] = useState<{winner: string, spy: string} | null>(null);
+  const [roundNumber, setRoundNumber] = useState<number>(0);
   const [showChatInput, setShowChatInput] = useState<boolean>(false);
   const [speakStatement, setSpeakStatement] = useState<boolean>(false);
   const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null);
@@ -142,13 +143,10 @@ const RoomView = () => {
   const [votingResults, setVotingResults] = useState<{[playerId: string]: string[]} | null>(null);
   const [votingEnded, setVotingEnded] = useState<boolean>(false);
   const [currentUserVote, setCurrentUserVote] = useState<string | null>(null);
+  const [userWord, setUserWord] = useState<string | null>(null);
 
   useEffect(() => {
-    sendMessage(JSON.stringify({
-      type: 'join_room',
-      roomId,
-      userId,
-    }));
+    
 
     return ()=>{
       sendMessage(JSON.stringify({
@@ -184,6 +182,9 @@ const RoomView = () => {
     const unsubscribeRoundStarted = addMessageListener('round_started', (message: any) => {
       console.log("ROUND_STARTED", message);
       setCurrentRound(message.roundNo);
+      setRoundNumber(message.roundNo);
+      setModalType('round_started');
+      setModalVisible(true);
     });
 
     const unsubscribePlayerAlreadyInRoom = addMessageListener('player_already_in_room', (message: any) => {
@@ -210,6 +211,7 @@ const RoomView = () => {
     const unsubscribeSpy = addMessageListener('spy', (message: any) => {
       console.log("SPY", message);
       setSpyword(message.word);
+      setUserWord(message.word); // Set user's word for display
       setModalType('word');
       setModalWord(message.word);
       setModalWordType('spy');
@@ -224,6 +226,7 @@ const RoomView = () => {
     const unsubscribeCivilianWord = addMessageListener('civilianWord', (message: any) => {
       console.log("CIVILIAN_WORD", message);
       setCivilianWord(message.word);
+      setUserWord(message.word); // Set user's word for display
       setModalType('word');
       setModalWord(message.word);
       setModalWordType('civilian');
@@ -239,6 +242,7 @@ const RoomView = () => {
       console.log("SPEAK_STATEMENT", message);
       setCurrentSpeaker(message.currentSpeaker);
       setVotingEnded(false); // Show mic icon for the new speaker
+      setModalVisible(false); // Close round started modal when speaker starts
       if(speakerTimerRef.current) {
         clearInterval(speakerTimerRef.current);
         speakerTimerRef.current = null;
@@ -255,19 +259,33 @@ const RoomView = () => {
       }
       else {
         setSpeakStatement(false);
+        // Allow users to speak during voting and after voting ends
         if (!localParticipant) return;
-        await localParticipant.setMicrophoneEnabled(false);
-        setIsMicOn(false);
+        if (voting || votingEnded) {
+          // Keep mic enabled during voting and after voting ends
+          await localParticipant.setMicrophoneEnabled(true);
+          setIsMicOn(true);
+        } else {
+          // Only mute during structured speaking phase
+          await localParticipant.setMicrophoneEnabled(false);
+          setIsMicOn(false);
+        }
       }
       
     });
 
-    const unsubscribeStartVoting = addMessageListener('start_voting', (message: any) => {
+    const unsubscribeStartVoting = addMessageListener('start_voting', async (message: any) => {
       console.log("START_VOTING", message);
       setVoting(true);
       setModalType('voting');
       setModalVisible(true);
       setCurrentUserVote(null); // Clear previous vote when new voting starts
+      
+      // Enable mics for all users during voting
+      if (localParticipant) {
+        await localParticipant.setMicrophoneEnabled(true);
+        setIsMicOn(true);
+      }
       
       // Auto-close voting modal after 1.5 seconds
       setTimeout(() => {
@@ -291,11 +309,18 @@ const RoomView = () => {
       }, 100); // Small delay to ensure clean state
     });
 
-    const unsubscribeEndVoting = addMessageListener('end_voting', (message: any) => {
+    const unsubscribeEndVoting = addMessageListener('end_voting', async (message: any) => {
       console.log("END_VOTING", message);
       setVoting(false);
       setVotingEnded(true); // Hide mic icons after voting ends
       setCurrentUserVote(null); // Clear current user's vote when voting ends
+      
+      // Keep mics enabled after voting ends
+      if (localParticipant) {
+        await localParticipant.setMicrophoneEnabled(true);
+        setIsMicOn(true);
+      }
+      
       if(votingTimerRef.current) {
         clearInterval(votingTimerRef.current);
         votingTimerRef.current = null;
@@ -345,6 +370,7 @@ const RoomView = () => {
       setGameStarted(false);
       setSpyword(null);
       setCivilianWord(null);
+      setUserWord(null); // Clear user's word when game ends
       setReady(false);
       setNotReady(false);
       setSpeakStatement(false);
@@ -633,23 +659,44 @@ const RoomView = () => {
                 <Text style={styles.roundText}>{gameStarted ? currentRound : "--"}</Text>
               </View>
             </View>
-            <PlayersGrid 
-              players={players} 
-              onPressMic={handlePressMic} 
-              currentSpeaker={currentSpeaker || undefined}
-              isVoting={voting}
-              onVote={handleVote}
-              votingResults={votingResults}
-              votingEnded={votingEnded}
-              currentUserVote={currentUserVote}
-              currentUserId={userId}
-            />
+            
+            {/* User's Word Display */}
+            {userWord && gameStarted && (
+              <View style={styles.wordDisplayContainer}>
+                <Text style={styles.wordDisplayLabel}>Word</Text>
+                <Text style={styles.wordDisplayText}>{userWord}</Text>
+              </View>
+            )}
+            
+            <View style={styles.playersGridContainer}>
+              <PlayersGrid 
+                players={players} 
+                onPressMic={handlePressMic} 
+                currentSpeaker={currentSpeaker || undefined}
+                isVoting={voting}
+                onVote={handleVote}
+                votingResults={votingResults}
+                votingEnded={votingEnded}
+                currentUserVote={currentUserVote}
+                currentUserId={userId}
+              />
+              
+              {/* Current Speaker Display */}
+              {currentSpeaker && gameStarted && !voting && !votingEnded && (
+                <View style={styles.speakerDisplayContainer}>
+                  <Text style={styles.speakerDisplayText}>
+                    {currentSpeaker} is speaking
+                  </Text>
+                </View>
+              )}
+            </View>
             <PrimaryActions 
               onInvite={handleInvite} 
               onReady={handleReady}
               isReady={ready}
               isInviteDisabled={true}
               isReadyDisabled={gameStarted}
+              showReadyButton={!gameStarted}
             />
             <ChatPanel messages={formattedChatMessages} />
           </View>
@@ -698,6 +745,7 @@ const RoomView = () => {
           word={modalWord}
           wordType={modalWordType}
           gameResult={gameResult}
+          roundNumber={roundNumber}
           onClose={handleModalClose}
         />
       </LinearGradient>

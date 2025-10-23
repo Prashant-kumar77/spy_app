@@ -5,11 +5,12 @@ import { styles, Colors } from '../screens/styles';
 
 interface GameModalProps {
   visible: boolean;
-  type: 'countdown' | 'word' | 'voting' | 'game_result';
+  type: 'countdown' | 'word' | 'voting' | 'game_result' | 'round_started';
   countdown?: number;
   word?: string;
   wordType?: 'spy' | 'civilian';
   gameResult?: {winner: string, spy: string} | null;
+  roundNumber?: number;
   onClose: () => void;
 }
 
@@ -20,6 +21,7 @@ const GameModal: React.FC<GameModalProps> = ({
   word = '',
   wordType = 'civilian',
   gameResult = null,
+  roundNumber = 0,
   onClose,
 }) => {
   useEffect(() => {
@@ -64,17 +66,13 @@ const GameModal: React.FC<GameModalProps> = ({
         return (
           <View style={styles.modalContent}>
             <MaterialCommunityIcons 
-              name={wordType === 'spy' ? 'skull' : 'shield'} 
+              name="eye" 
               size={60} 
-              color={wordType === 'spy' ? '#FF6B6B' : '#4CAF50'} 
+              color={Colors.white} 
             />
-            <Text style={styles.modalTitle}>
-              {wordType === 'spy' ? 'You are the Spy!' : 'You are a Civilian!'}
-            </Text>
+            <Text style={styles.modalTitle}>Your Word</Text>
             <Text style={styles.modalWord}>{word}</Text>
-            <Text style={styles.modalSubtitle}>
-              {wordType === 'spy' ? 'Find the civilian word' : 'Find the spy'}
-            </Text>
+            <Text style={styles.modalSubtitle}>Remember this word</Text>
           </View>
         );
       
@@ -84,6 +82,15 @@ const GameModal: React.FC<GameModalProps> = ({
             <MaterialCommunityIcons name="vote" size={60} color={Colors.white} />
             <Text style={styles.modalTitle}>Voting Started</Text>
             <Text style={styles.modalSubtitle}>Choose who you think is the spy</Text>
+          </View>
+        );
+      
+      case 'round_started':
+        return (
+          <View style={styles.modalContent}>
+            <MaterialCommunityIcons name="counter" size={60} color={Colors.white} />
+            <Text style={styles.modalTitle}>Round {roundNumber}</Text>
+            <Text style={styles.modalSubtitle}>Let's begin!</Text>
           </View>
         );
       

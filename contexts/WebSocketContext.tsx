@@ -6,6 +6,7 @@ interface WebSocketContextType {
   sendMessage: (message: string) => void;
   addMessageListener: (type: string, callback: (data: any) => void) => () => void;
   isConnected: boolean;
+  disconnect: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
@@ -83,9 +84,8 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      if (socketRef.current) {
-        socketRef.current.close(1000, "Component unmounting");
-      }
+      // Don't close the WebSocket when component unmounts
+      // Let it stay connected for navigation between screens
     };
   }, [connect]);
 
@@ -117,8 +117,17 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
   }, []);
 
+  const disconnect = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.close(1000, "App closing");
+    }
+  }, []);
+
   return (
-    <WebSocketContext.Provider value={{ sendMessage, addMessageListener, isConnected }}>
+    <WebSocketContext.Provider value={{ sendMessage, addMessageListener, isConnected, disconnect }}>
       {children}
     </WebSocketContext.Provider>
   );

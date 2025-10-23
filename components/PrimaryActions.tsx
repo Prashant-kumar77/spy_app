@@ -9,6 +9,7 @@ interface PrimaryActionsProps {
   isReady?: boolean;
   isInviteDisabled?: boolean;
   isReadyDisabled?: boolean;
+  showReadyButton?: boolean;
 }
 
 const PrimaryActions: React.FC<PrimaryActionsProps> = ({
@@ -17,6 +18,7 @@ const PrimaryActions: React.FC<PrimaryActionsProps> = ({
   isReady = false,
   isInviteDisabled = false,
   isReadyDisabled = false,
+  showReadyButton = true,
 }) => {
   return (
     <View style={styles.primaryActions}>
@@ -36,21 +38,23 @@ const PrimaryActions: React.FC<PrimaryActionsProps> = ({
       </TouchableOpacity> */}
 
       {/* Get Ready Button */}
-      <TouchableOpacity
-        onPress={onReady}
-        disabled={isReadyDisabled}
-        style={{ opacity: isReadyDisabled ? 0.5 : 1 }}
-        accessibilityLabel={isReady ? "Mark as not ready" : "Mark as ready"}
-      >
-        <LinearGradient
-          colors={[Colors.readyStart, Colors.readyEnd]}
-          style={styles.primaryButton}
+      {showReadyButton && (
+        <TouchableOpacity
+          onPress={onReady}
+          disabled={isReadyDisabled}
+          style={{ opacity: isReadyDisabled ? 0.5 : 1 }}
+          accessibilityLabel={isReady ? "Mark as not ready" : "Mark as ready"}
         >
-          <Text style={styles.primaryButtonText}>
-            {isReady ? 'Ready' : 'Get Ready'}
-          </Text>
-        </LinearGradient>
-      </TouchableOpacity>
+          <LinearGradient
+            colors={[Colors.readyStart, Colors.readyEnd]}
+            style={styles.primaryButton}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isReady ? 'Ready' : 'Get Ready'}
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
     </View>
   );
 };

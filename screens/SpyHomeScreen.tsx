@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -29,15 +29,56 @@ type Props = {
 const { width, height } = Dimensions.get('window');
 
 const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
-  const { sendMessage } = useWebSocket();
+  const { sendMessage, addMessageListener } = useWebSocket();
   const [joinVisible, setJoinVisible] = useState(false);
   const [roomId, setRoomId] = useState('');
   const [name, setName] = useState('');
   const dispatch = useAppDispatch();
 
+
+  useEffect(()=>{
+
+    const unsubscribeQuickJoin = addMessageListener('quick_join_response', (message: any) => {
+      console.log('QUICK_JOIN_RESPONSE', message);
+      setRoomId(message.roomId);
+      confirmJoin();
+    });
+
+    const unsubscribeRoomSeatAvailable = addMessageListener('room_seat_available', (message: any) => {
+      console.log('ROOM_SEAT_AVAILABLE', message);
+      setJoinVisible(false);
+      navigation.navigate('Room', { roomId: message.roomId, name: message.userId });
+    });
+
+    const unsubscribeRoomFull = addMessageListener('room_full', (message: any) => {
+      console.log('ROOM_FULL', message);
+      setJoinVisible(false);
+      Alert.alert('Room is full', 'Please try again later');
+    });
+    
+    const unsubscribeRoomNotFound = addMessageListener('room_not_found', (message: any) => {
+      console.log('room_not_found', message);
+      setJoinVisible(false);
+      Alert.alert('Room does not exist', 'Please try again later');
+    });
+
+    return () => {
+      unsubscribeQuickJoin();
+      unsubscribeRoomFull();
+      unsubscribeRoomSeatAvailable();
+      unsubscribeRoomNotFound();
+    };
+  }, [addMessageListener]);
+
   const handleGameMode = (mode: 'spy' | 'wordless') => {
     // Navigate to game mode selection or room creation
     console.log(`Selected game mode: ${mode}`);
+  };
+
+  const handleQuickJoin = () => {
+    sendMessage(JSON.stringify({
+      type: 'QUICK_JOIN',
+    }));
   };
 
   const handleJoinRoom = () => {
@@ -110,7 +151,11 @@ const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
       dispatch(setRoomToken(json.roomToken || null));
       dispatch(setRoomIdAction(json.roomData?.id || roomId.trim()));
       dispatch(setUserId(json.userId || null));
-      navigation.navigate('Room', { roomId: json.roomData?.id || roomId.trim(), name: playerName });
+      sendMessage(JSON.stringify({
+        type: 'join_room',
+        roomId: json.roomData?.id || roomId.trim(),
+        userId: json.userId,
+      }));
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Failed to join room. Please check the room ID and try again.');
@@ -144,7 +189,7 @@ const SpyHomeScreen: React.FC<Props> = ({ navigation }) => {
         {/* Who's the Spy Button */}
         <TouchableOpacity 
           style={[styles.gameModeButton, styles.spyButton]} 
-          onPress={() => handleGameMode('spy')}
+          onPress={handleQuickJoin}
           activeOpacity={0.8}
         >
           <View style={styles.buttonContent}>

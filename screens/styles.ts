@@ -1,6 +1,6 @@
 import { StyleSheet, Dimensions } from 'react-native';
 
-const { width: screenWidth } = Dimensions.get('window');
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 export const Colors = {
   bgTop: '#2E6DFF',
@@ -389,7 +389,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: Spacing.xl,
     paddingBottom: Spacing.lg,
-    paddingTop: Spacing.md,
+    paddingTop: Spacing.xxl,
   },
   toolbarButton: {
     width: Sizes.toolbarButton,
@@ -621,5 +621,65 @@ export const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  wordDisplayContainer: {
+    position: 'absolute',
+    top: screenHeight * 0.14, // 15% from top of screen
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    paddingHorizontal: Spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wordDisplayLabel: {
+    color: Colors.white, // White color for "Your Word:"
+    fontSize: screenWidth < 400 ? 14 : 16, // Responsive font size
+    fontWeight: FontWeights.medium,
+    textAlign: 'center',
+  },
+  wordDisplayText: {
+    color: Colors.readyStart, // Yellow/gold color for the actual word
+    fontSize: screenWidth < 400 ? 20 : 24, // Increased font size
+    fontWeight: FontWeights.bold,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: {
+      width: 1,
+      height: 1,
+    },
+    textShadowRadius: 3,
+  },
+  playersGridContainer: {
+    position: 'relative',
+  },
+  speakerDisplayContainer: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -screenWidth * 0.2 }, { translateY: -15 }],
+    zIndex: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speakerDisplayText: {
+    color: Colors.white,
+    fontSize: screenWidth < 400 ? 14 : 16,
+    fontWeight: FontWeights.bold,
+    textAlign: 'center',
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    // borderWidth: 1,
+    borderColor: Colors.textPrimary,
+    maxWidth: screenWidth * 0.55, // 85% of screen width
+    minWidth: screenWidth * 0.4, // Minimum 50% of screen width
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: Spacing.lg,
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: {
+      width: 1,
+      height: 1,
+    },
+    textShadowRadius: 2,
   },
 });

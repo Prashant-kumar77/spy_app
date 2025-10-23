@@ -81,26 +81,45 @@ const PlayerSeat: React.FC<PlayerSeatProps> = ({
   return (
     <View style={styles.playerSeat}>
       {/* Avatar */}
-      {isVoting && !isEmpty && isAlive ? (
-        <TouchableOpacity 
-          style={[styles.avatar]} 
-          onPress={onVote}
-        >
-          <View style={{
-            width: Sizes.seatInner,
-            height: Sizes.seatInner,
-            borderRadius: Sizes.seatInner / 2,
-            backgroundColor: avatarColor,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 2,
-            borderColor: Colors.readyStart,
-          }}>
-            <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>
-              {player.charAt(0).toUpperCase()}
-            </Text>
+      {isVoting && !isEmpty ? (
+        isAlive ? (
+          <TouchableOpacity 
+            style={[styles.avatar]} 
+            onPress={onVote}
+          >
+            <View style={{
+              width: Sizes.seatInner,
+              height: Sizes.seatInner,
+              borderRadius: Sizes.seatInner / 2,
+              backgroundColor: avatarColor,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 2,
+              borderColor: Colors.readyStart,
+            }}>
+              <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>
+                {player.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <View style={[styles.avatar]}>
+            <View style={{
+              width: Sizes.seatInner,
+              height: Sizes.seatInner,
+              borderRadius: Sizes.seatInner / 2,
+              backgroundColor: avatarColor,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 2,
+              borderColor: 'rgba(255,255,255,0.3)',
+            }}>
+              <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>
+                {player.charAt(0).toUpperCase()}
+              </Text>
+            </View>
           </View>
-        </TouchableOpacity>
+        )
       ) : (
         <View style={[styles.avatar]}>
           {isEmpty ? (
